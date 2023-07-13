@@ -1,4 +1,3 @@
-import java.io.InputStream;
 import java.math.BigInteger;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -8,9 +7,15 @@ import java.util.*;
 
 public class SmartHomeHub {
 
-    private short hubAddress;
-    private URL serverURL;
+    private final short hubAddress;
+    private final URL serverURL;
+
+    private BigInteger whoIsHereTimestamp = BigInteger.valueOf(-1);
+    private BigInteger currentTimestamp = BigInteger.valueOf(0);
     private Queue<Payload> sendQueue = new ArrayDeque<>();
+    private Map<Short, BigInteger> waitingResponses = new HashMap<>();
+    private Map<Short, Device> devices = new HashMap<>();
+
     private BigInteger serialCounter = BigInteger.valueOf(1);
     public static final short BROADCASTING_ADDRESS = 0x3FFF;
 
@@ -63,6 +68,7 @@ public class SmartHomeHub {
 
         public Payload setCmd(byte cmd) {
             this.cmd = cmd;
+
             return this;
         }
 
@@ -126,24 +132,196 @@ public class SmartHomeHub {
                     ", cmd_body=" + (cmd_body == null ? "null" : cmd_body.toString()) +
                     '}';
         }
-    }
 
-//    static class Device {
-//        short address;
-//        String name;
-//
-//        // Тип устройства
-//        byte type;
-//    }
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof Payload payload)) return false;
+            return src == payload.src &&
+                    dst == payload.dst &&
+                    dev_type == payload.dev_type &&
+                    cmd == payload.cmd &&
+                    Objects.equals(serial, payload.serial) &&
+                    Objects.equals(cmd_body, payload.cmd_body);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(src, dst, serial, dev_type, cmd, cmd_body);
+        }
+    }
 
     static abstract class Device {
         short address;
         String name;
-        byte type;
-        boolean status;
+
+        abstract DEVICE_TYPES_ENUM getType();
     }
 
+    static class Lamp extends Device {
+        boolean status;
 
+        @Override
+        DEVICE_TYPES_ENUM getType() {
+            return DEVICE_TYPES_ENUM.Lamp;
+        }
+
+        @Override
+        public String toString() {
+            return "Lamp{" +
+                    "status=" + status +
+                    ", address=" + address +
+                    ", name='" + name + '\'' +
+                    '}';
+        }
+    }
+
+    static class Switch extends Device {
+        boolean status;
+        List<String> devices = new ArrayList<>();
+
+        @Override
+        DEVICE_TYPES_ENUM getType() {
+            return DEVICE_TYPES_ENUM.Switch;
+        }
+
+        @Override
+        public String toString() {
+            return "Switch{" +
+                    "status=" + status +
+                    ", devices=" + devices +
+                    ", address=" + address +
+                    ", name='" + name + '\'' +
+                    '}';
+        }
+    }
+
+    static class Socket extends Device {
+        boolean status;
+
+        @Override
+        DEVICE_TYPES_ENUM getType() {
+            return DEVICE_TYPES_ENUM.Socket;
+        }
+
+        @Override
+        public String toString() {
+            return "Socket{" +
+                    "status=" + status +
+                    ", address=" + address +
+                    ", name='" + name + '\'' +
+                    '}';
+        }
+    }
+
+    static class EnvSensor extends Device {
+
+        public EnvSensor(Short address, String name, byte sensors, byte[] triggersBytes) {
+            this.address = address;
+            this.name = name;
+            // Определяем какие сенсоры есть
+            if ((sensors & 0x1) == 0x01) {
+                temperature = 0;
+            } else {
+                temperature = -1;
+            }
+            if ((sensors & 0x2) == 0x2) {
+                humidity = 0;
+            } else {
+                humidity = -1;
+            }
+            if ((sensors & 0x4) == 0x4) {
+                illumination = 0;
+            } else {
+                illumination = -1;
+            }
+            if ((sensors & 0x8) == 0x8) {
+                airPollution = 0;
+            } else {
+                airPollution = -1;
+            }
+
+
+            // Определяем триггеры
+            if (triggersBytes.length > 0) {
+                var buffer = ByteBuffer.wrap(triggersBytes);
+
+                var triggersCount = readULEB128(buffer).intValue();
+                for (int i = 0; i < triggersCount; i++) {
+                    var trigger = new Trigger();
+                    var op = buffer.get();
+
+                    // Младший бит - включить или выключить устройство
+                    trigger.enabled = (op & 0x01) == 0x01;
+                    // Следующий бит - операция сравнения
+                    trigger.more = (op & 0x02) == 0x02;
+                    // Следующие 2 бита - тип сенсора
+                    trigger.sensorType = (byte) ((op & 0x0C) >> 2);
+                    // Значение триггера
+                    trigger.value = readULEB128(buffer).intValue();
+                    // Имя триггера
+                    trigger.name = decodeStringFromBytes(buffer);
+                    triggers.add(trigger);
+                }
+            }
+        }
+
+        // Температура
+        int temperature;
+        // Влажность
+        int humidity;
+        // Освещенность
+        int illumination;
+        // Загрязненность воздуха (PM2.5)
+        int airPollution;
+
+
+        // Триггеры
+        List<Trigger> triggers = new ArrayList<>();
+
+        @Override
+        DEVICE_TYPES_ENUM getType() {
+            return DEVICE_TYPES_ENUM.EnvSensor;
+        }
+
+        static class Trigger {
+            // Включить или выключить устройство
+            boolean enabled;
+
+            // Операция сравнения
+            boolean more; // true - когда значение датчика больше значения триггера, false - когда меньше
+
+            // Тип сенсора
+            byte sensorType;
+
+            int value;
+            String name;
+
+            @Override
+            public String toString() {
+                return "Trigger{" +
+                        "enabled=" + enabled +
+                        ", more=" + more +
+                        ", sensorType=" + sensorType +
+                        ", value=" + value +
+                        ", name='" + name + '\'' +
+                        '}';
+            }
+        }
+
+        @Override
+        public String toString() {
+            return "EnvSensor{" +
+                    "temperature=" + temperature +
+                    ", humidity=" + humidity +
+                    ", illumination=" + illumination +
+                    ", airPollution=" + airPollution +
+                    ", triggers=" + triggers +
+                    ", address=" + address +
+                    ", name='" + name + '\'' +
+                    '}';
+        }
+    }
 
     private enum DEVICE_TYPES_ENUM {
         SmartHub(0x01), // SmartHub
@@ -178,6 +356,15 @@ public class SmartHomeHub {
             this.value = value;
         }
 
+        public static COMMANDS_ENUM fromByte(byte value) {
+            for (var command : COMMANDS_ENUM.values()) {
+                if (command.getValue() == value) {
+                    return command;
+                }
+            }
+            return null;
+        }
+
         public byte getValue() {
             return (byte) value;
         }
@@ -192,6 +379,29 @@ public class SmartHomeHub {
         hubAddress = Short.parseShort(address, 16);
     }
 
+
+    // Проверка на наличие в списке устройств по имени, если есть - возвращает его, если нет - null
+    private Device getDeviceByName(String name) {
+        return devices.values().stream().filter(device -> device.name.equals(name)).findFirst().orElse(null);
+    }
+
+    private void deleteDeviceByName(String name) {
+        for (var device : devices.values()) {
+            if (device.name.equals(name)) {
+                devices.remove(device.address);
+                break;
+            }
+        }
+    }
+
+    private void deleteDeviceByAddress(short address) {
+        devices.remove(address);
+    }
+
+    private int getInterval(BigInteger first, BigInteger second) {
+        return second.subtract(first).intValue();
+    }
+
     private void sendNextRequest() {
         try {
             HttpURLConnection connection = (HttpURLConnection) serverURL.openConnection();
@@ -200,12 +410,18 @@ public class SmartHomeHub {
             connection.setDoInput(true);
 
             var payload = sendQueue.poll();
-            if (payload == null) {
-                return;
+
+            if (payload != null && payload.cmd != COMMANDS_ENUM.IAMHERE.getValue()) {
+                waitingResponses.put(payload.dst, currentTimestamp);
             }
 
-            connection.getOutputStream().write(encodePacketToTransfer(payload));
+            if (payload != null) {
+                connection.getOutputStream().write(encodePacketToTransfer(payload));
+            }
+
             connection.getOutputStream().flush();
+
+//            System.out.println(connection.getResponseCode() + " " + connection.getResponseMessage());
 
             if (connection.getResponseCode() == 204) {
                 System.exit(0);
@@ -218,10 +434,18 @@ public class SmartHomeHub {
             var response = connection.getInputStream().readAllBytes();
             processResponse(response);
 
+//            String[] testPackets = new String[]{
+//                    "DQT_fwwEAgZMQU1QMDGU", // LAMP
+//                    "DwX_fxEFAghTT0NLRVQwMc0", // Socket
+//            };
+//
+//            for (String testPacket : testPackets) {
+//                processResponse(testPacket.getBytes());
+//            }
+
         } catch (Exception e) {
             System.exit(99);
         }
-        System.exit(0);
     }
 
     private void addRequestToQueue(Payload payload) {
@@ -244,18 +468,73 @@ public class SmartHomeHub {
         addRequestToQueue(payload);
     }
 
-    private void processPayload(Payload payload) {
+    private void sendGetStatus(Device device) {
+        var payload = Payload.create()
+                .setSrc(hubAddress)
+                .setDst(device.address)
+                .setSerial(serialCounter)
+                .setDev_type(device.getType().getValue())
+                .setCmd(COMMANDS_ENUM.GETSTATUS.getValue());
+        addRequestToQueue(payload);
+    }
+
+    private void processWhoIsHere(Payload payload) {
+        // Проверяем, было ли устройство уже добавлено в список (По имени)
+        var device = getDeviceByName(((Payload.CmdBodyDevice) payload.cmd_body).dev_name);
+        if (device != null) {
+            // Удаляем устройство из списка
+            deleteDeviceByName(device.name);
+        }
+        // Добавляем устройство в список
+        var newDevice = decodeDeviceFromBytes(payload);
+        devices.put(newDevice.address, newDevice);
+    }
+
+    private void processIAmHere(Payload payload) {
+        // Добавляем устройство в список
+        // Определяем тип устройства
+        var device = decodeDeviceFromBytes(payload);
+        if (device == null) {
+            return;
+        }
+        // Проверяем, успело ли устройство ответить за 300мс
+        if (getInterval(whoIsHereTimestamp, currentTimestamp) > 300) {
+            return;
+        }
+        System.out.println("Interval: " + getInterval(whoIsHereTimestamp, currentTimestamp));
+
+        devices.put(device.address, device);
+        System.out.println(Arrays.toString(devices.entrySet().toArray()));
+    }
+
+    private void processGetStatus(Payload payload) {
+        // Проверям, успело ли устройство ответить за 300мс
+        var time = waitingResponses.get(payload.src);
+        // Если ожидание ответа от устройства превысило 300мс, то удаляем устройство из списка
+        if (time != null) {
+            if (getInterval(time, currentTimestamp) > 300) {
+                // Удаляем устройство из списка
+                deleteDeviceByAddress(payload.src);
+            }
+            // Убираем устройство из списка ожидания ответа
+            waitingResponses.remove(payload.src);
+        }
+
+        // Обновляем данные устройства
+        var device = devices.get(payload.src);
+        if (device == null) {
+            return;
+        }
+
+
 
     }
 
-    private void processIAMHERE(Payload payload) {
-        // Добавляем устройство в список
-//        var device = new Device();
-//        device.address = payload.src;
-//        device.name = ((Payload.CmdBodyDevice) payload.cmd_body).dev_name;
-//
-//
-//        addRequestToQueue(response);
+    private void processTICK(Payload payload) {
+        currentTimestamp = ((Payload.CmdBodyTimer) payload.cmd_body).timestamp;
+        if (whoIsHereTimestamp.intValue() == -1) {
+            whoIsHereTimestamp = currentTimestamp;
+        }
     }
 
     /**
@@ -265,18 +544,15 @@ public class SmartHomeHub {
      */
 
     private void processResponse(byte[] response) {
-
         var decoder = Base64.getUrlDecoder();
-//        byte[] responseBytes = decoder.decode(response);
-
         ByteBuffer buffer = ByteBuffer.wrap(decoder.decode(response));
 
         do {
-            processPacket(buffer);
+            decodePacketFromBytes(buffer);
         } while (buffer.hasRemaining());
     }
 
-    private void processPacket(ByteBuffer buffer) {
+    private void decodePacketFromBytes(ByteBuffer buffer) {
         int length = buffer.get();
         var packet = new Packet();
         packet.length = (byte) length;
@@ -285,14 +561,54 @@ public class SmartHomeHub {
         packet.crc8 = buffer.get();
 
         if (packet.crc8 == calculateCRC(packet)) {
-            var payload = decodePayloadFromBytes(packet.payload, packet.length);
-            System.out.println(payload);
+            decodePayloadFromBytes(packet.payload);
         }
     }
 
-    private Payload decodePayloadFromBytes(byte[] payloadBytes, byte length) {
-        ByteBuffer buffer = ByteBuffer.wrap(payloadBytes);
+    private Device decodeDeviceFromBytes(Payload payload) {
+        var name = ((Payload.CmdBodyDevice) payload.cmd_body).dev_name;
+        var buffer = ByteBuffer.wrap(((Payload.CmdBodyDevice) payload.cmd_body).dev_props);
+        switch (payload.dev_type) {
+            case 0x02: {
+                byte sensors = buffer.get();
+                byte[] triggers = new byte[buffer.remaining()];
+                buffer.get(triggers);
+                return new EnvSensor(
+                        payload.src,
+                        ((Payload.CmdBodyDevice) payload.cmd_body).dev_name,
+                        sensors,
+                        triggers
+                );
+            }
+            case 0x03: {
+                var switchDevice = new Switch();
+                switchDevice.address = payload.src;
+                switchDevice.name = name;
 
+                var arrayLength = buffer.get();
+                for (int i = 0; i < arrayLength; i++) {
+                    switchDevice.devices.add(decodeStringFromBytes(buffer));
+                }
+                return switchDevice;
+            }
+            case 0x04: {
+                var lamp = new Lamp();
+                lamp.address = payload.src;
+                lamp.name = name;
+                return lamp;
+            }
+            case 0x05: {
+                var socket = new Socket();
+                socket.address = payload.src;
+                socket.name = name;
+                return socket;
+            }
+        }
+        return null;
+    }
+
+    private void decodePayloadFromBytes(byte[] payloadBytes) {
+        ByteBuffer buffer = ByteBuffer.wrap(payloadBytes);
         var payload = new Payload();
         payload.src = readULEB128(buffer).shortValue();
         payload.dst = readULEB128(buffer).shortValue();
@@ -300,39 +616,49 @@ public class SmartHomeHub {
         payload.dev_type = buffer.get();
         payload.cmd = buffer.get();
 
-
+        if (payload.dst != hubAddress && payload.dst != BROADCASTING_ADDRESS) {
+            return;
+        }
         switch (payload.cmd) {
             case 0x01: // WHOISHERE
                 System.out.println("Decode: WHOISHERE");
                 payload.cmd_body = new Payload.CmdBodyDevice();
                 ((Payload.CmdBodyDevice) payload.cmd_body).dev_name = decodeStringFromBytes(buffer);
-                ((Payload.CmdBodyDevice) payload.cmd_body).dev_props = new byte[length - 1 - ((Payload.CmdBodyDevice) payload.cmd_body).dev_name.length()];
+                ((Payload.CmdBodyDevice) payload.cmd_body).dev_props = buffer.get(new byte[buffer.remaining()]).array();
+                processWhoIsHere(payload);
                 break;
             case 0x02: // IAMHERE
                 System.out.println("Decode: IAMHERE");
                 payload.cmd_body = new Payload.CmdBodyDevice();
                 ((Payload.CmdBodyDevice) payload.cmd_body).dev_name = decodeStringFromBytes(buffer);
-                ((Payload.CmdBodyDevice) payload.cmd_body).dev_props = new byte[length - 1 - ((Payload.CmdBodyDevice) payload.cmd_body).dev_name.length()];
+                byte[] dev_props = new byte[buffer.remaining()];
+                buffer.get(dev_props);
+                ((Payload.CmdBodyDevice) payload.cmd_body).dev_props = dev_props;
+                processIAmHere(payload);
                 break;
             case 0x03: // GETSTATUS
                 System.out.println("Decode: GETSTATUS");
+                processGetStatus(payload);
                 break;
             case 0x04: // STATUS
                 System.out.println("Decode: STATUS");
+
                 break;
             case 0x05: // SETSTATUS
                 System.out.println("Decode: SETSTATUS");
 //                payload.cmd_body = new Payload.CmdBodyDevice();
                 break;
             case 0x06: // TICK
-                System.out.println("Decode: TICK");
+//                System.out.println("Decode: TICK");
                 Payload.CmdBodyTimer cmdBodyTimer = new Payload.CmdBodyTimer();
                 cmdBodyTimer.timestamp = readULEB128(buffer);
                 payload.cmd_body = cmdBodyTimer;
+
+                processTICK(payload);
                 break;
         }
 
-        return payload;
+//        System.out.println(payload);
     }
 
 
@@ -389,31 +715,6 @@ public class SmartHomeHub {
         }
     }
 
-    private Payload.CmdBody decodeCmdBody(ByteBuffer buffer, byte cmd, int length) {
-        switch (cmd) {
-            case 0x01: // WHOISHERE
-                var cmdBody = new Payload.CmdBodyDevice();
-                cmdBody.dev_name = decodeStringFromBytes(buffer);
-                cmdBody.dev_props = new byte[length - 1 - cmdBody.dev_name.length()];
-                buffer.get(cmdBody.dev_props);
-                return cmdBody;
-            case 0x02: // IAMHERE
-                return null;
-            case 0x03: // GETSTATUS
-                return null;
-            case 0x04: // STATUS
-                return null;
-            case 0x05: // SETSTATUS
-                return null;
-            case 0x06: // TICK
-                Payload.CmdBodyTimer cmdBodyTimer = new Payload.CmdBodyTimer();
-                cmdBodyTimer.timestamp = readULEB128(buffer);
-                return cmdBodyTimer;
-        }
-        return null;
-
-    }
-
     private byte calculateCRC(Packet packet) {
         final byte generator = 0x1D; // Генераторный полином
         byte crc = 0; // Начальное значение
@@ -445,7 +746,7 @@ public class SmartHomeHub {
         }
     }
 
-    private BigInteger readULEB128(ByteBuffer buffer) {
+    private static BigInteger readULEB128(ByteBuffer buffer) {
         BigInteger result = BigInteger.ZERO;
         int shift = 0;
         while (true) {
@@ -464,24 +765,30 @@ public class SmartHomeHub {
         buffer.put(value.getBytes(StandardCharsets.UTF_8));
     }
 
-    private String decodeStringFromBytes(ByteBuffer buffer) {
+    private static String decodeStringFromBytes(ByteBuffer buffer) {
         var length = buffer.get();
-        var bytes = new byte[length];
+        byte[] bytes = new byte[length];
         buffer.get(bytes);
         return new String(bytes, StandardCharsets.UTF_8);
     }
 
 
     public void run() {
-        // Добавляем в очередь запрос на получение списка устройств
         sendWhoIsHere();
 
-        // Цикл обработки очереди запросов, 200 и 204 продолжаем работу, другие код 99
+        int a = 0;
         while (true) {
             sendNextRequest();
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            a++;
+            if (a > 15) {
+                break;
+            }
         }
-
-//        System.exit(0);
     }
 
     public static void main(String[] args) {
