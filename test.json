@@ -1,0 +1,14 @@
+{
+  "length": 11,
+  "payload": {
+    "src": 819,
+    "dst": 16383,
+    "serial": 1,
+    "dev_type": 1,
+    "cmd": 1,
+    "cmd_body": {
+      "dev_name": "Hub"
+    }
+  },
+  "crc8": 6
+}
