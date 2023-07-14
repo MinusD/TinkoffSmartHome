@@ -499,10 +499,17 @@ public class SmartHomeHub {
 //                    "OAL_fwQCAghTRU5TT1IwMQ8EDGQGT1RIRVIxD7AJBk9USEVSMgCsjQYGT1RIRVIzCAAGT1RIRVI09w", // EnvSensor
 //                    "IgP_fwgDAghTV0lUQ0gwMQMFREVWMDEFREVWMDIFREVWMDMo" // Switch
 //            };
-//
-//            for (String testPacket : testPackets) {
-//                processResponse(testPacket.getBytes());
-//            }
+
+            String[] testPackets = new String[] {
+                    "IgP_fwgDAghTV0lUQ0gwMQMFREVWMDEFREVWMDIFREVWMDMo",
+                    "DQT_fwwEAgZMQU1QMDGU",
+                    "DwX_fxEFAghTT0NLRVQwMc0",
+                    "OAL_fwQCAghTRU5TT1IwMQ8EDGQGT1RIRVIxD7AJBk9USEVSMgCsjQYGT1RIRVIzCAAGT1RIRVI09w"
+            };
+
+            for (String testPacket : testPackets) {
+                processResponse(testPacket.getBytes());
+            }
 
         } catch (Exception e) {
             System.exit(99);
@@ -677,6 +684,11 @@ public class SmartHomeHub {
             decodePacketFromBytes(buffer);
         } while (buffer.hasRemaining());
         processUpdateDevices();
+
+        for (var device : devices.values()) {
+            System.out.println(device);
+        }
+        System.out.println("---");
     }
 
     private void decodePacketFromBytes(ByteBuffer buffer) {
@@ -712,10 +724,16 @@ public class SmartHomeHub {
                 switchDevice.address = payload.src;
                 switchDevice.name = name;
 
+//                while (buffer.hasRemaining()) {
+//                    var deviceName = decodeStringFromBytes(buffer);
+//                    switchDevice.devicesNames.add(deviceName);
+//                }
+
                 var arrayLength = buffer.get();
                 for (int i = 0; i < arrayLength; i++) {
                     switchDevice.devicesNames.add(decodeStringFromBytes(buffer));
                 }
+
                 return switchDevice;
             }
             case 0x04: {
@@ -747,29 +765,34 @@ public class SmartHomeHub {
             return;
         }
 
-        switch (payload.cmd) {
-            case 0x01 -> { // WHOISHERE
-                payload.cmd_body = new Payload.CmdBodyDevice();
-                ((Payload.CmdBodyDevice) payload.cmd_body).dev_name = decodeStringFromBytes(buffer);
-                ((Payload.CmdBodyDevice) payload.cmd_body).dev_props = buffer.get(new byte[buffer.remaining()]).array();
-                processWhoIsHere(payload);
+        try {
+
+            switch (payload.cmd) {
+                case 0x01 -> { // WHOISHERE
+                    payload.cmd_body = new Payload.CmdBodyDevice();
+                    ((Payload.CmdBodyDevice) payload.cmd_body).dev_name = decodeStringFromBytes(buffer);
+                    ((Payload.CmdBodyDevice) payload.cmd_body).dev_props = buffer.get(new byte[buffer.remaining()]).array();
+                    processWhoIsHere(payload);
+                }
+                case 0x02 -> { // IAMHERE
+                    payload.cmd_body = new Payload.CmdBodyDevice();
+                    ((Payload.CmdBodyDevice) payload.cmd_body).dev_name = decodeStringFromBytes(buffer);
+                    byte[] dev_props = new byte[buffer.remaining()];
+                    buffer.get(dev_props);
+                    ((Payload.CmdBodyDevice) payload.cmd_body).dev_props = dev_props;
+                    processIAmHere(payload);
+                }
+                case 0x04 -> // STATUS
+                        processGetStatus(payload, buffer);
+                case 0x06 -> { // TICK
+                    Payload.CmdBodyTimer cmdBodyTimer = new Payload.CmdBodyTimer();
+                    cmdBodyTimer.timestamp = readULEB128(buffer);
+                    payload.cmd_body = cmdBodyTimer;
+                    processTICK(payload);
+                }
             }
-            case 0x02 -> { // IAMHERE
-                payload.cmd_body = new Payload.CmdBodyDevice();
-                ((Payload.CmdBodyDevice) payload.cmd_body).dev_name = decodeStringFromBytes(buffer);
-                byte[] dev_props = new byte[buffer.remaining()];
-                buffer.get(dev_props);
-                ((Payload.CmdBodyDevice) payload.cmd_body).dev_props = dev_props;
-                processIAmHere(payload);
-            }
-            case 0x04 -> // STATUS
-                    processGetStatus(payload, buffer);
-            case 0x06 -> { // TICK
-                Payload.CmdBodyTimer cmdBodyTimer = new Payload.CmdBodyTimer();
-                cmdBodyTimer.timestamp = readULEB128(buffer);
-                payload.cmd_body = cmdBodyTimer;
-                processTICK(payload);
-            }
+        } catch (Exception e) {
+            e.printStackTrace();
         }
     }
 
@@ -808,7 +831,7 @@ public class SmartHomeHub {
     }
 
     private byte[] encodePayloadToBytes(Payload payload) {
-        ByteBuffer buffer = ByteBuffer.allocate(1024);
+        ByteBuffer buffer = ByteBuffer.allocate(2048);
 
         writeULEB128(buffer, BigInteger.valueOf(payload.src));
         writeULEB128(buffer, BigInteger.valueOf(payload.dst));
@@ -904,6 +927,11 @@ public class SmartHomeHub {
     public void run() {
         sentWhoIsHere();
         while (true) {
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
             sentNextRequest();
         }
     }
