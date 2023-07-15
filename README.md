@@ -11,9 +11,9 @@ smarthome.exe -V -S 1 -s
 
 
 ```bash
-.\smarthome.exe -V -S 1 -s
+.\smarthome.exe -V -S 2 -s
 ```
 
 ```bash
-cls &&  smarthome.exe -V -S 1 -s
+cls && smarthome.exe -V -S 1 -s
 ```

@@ -66,7 +66,6 @@ public class SmartHomeHub {
 
         public Payload setCmd(byte cmd) {
             this.cmd = cmd;
-
             return this;
         }
 
@@ -220,7 +219,6 @@ public class SmartHomeHub {
     }
 
     class EnvSensor extends Device {
-
         public EnvSensor(Short address, String name, byte sensors, byte[] triggersBytes) {
             this.address = address;
             this.name = name;
@@ -233,7 +231,6 @@ public class SmartHomeHub {
             // Определяем триггеры
             if (triggersBytes.length > 0) {
                 var buffer = ByteBuffer.wrap(triggersBytes);
-
                 var triggersCount = buffer.get();
                 for (int i = 0; i < triggersCount; i++) {
                     var trigger = new Trigger();
@@ -300,7 +297,6 @@ public class SmartHomeHub {
 
             // Тип сенсора
             byte sensorType;
-
             int value;
             String name;
 
@@ -686,9 +682,10 @@ public class SmartHomeHub {
         var decoder = Base64.getUrlDecoder();
         ByteBuffer buffer = ByteBuffer.wrap(decoder.decode(response));
 
-        do {
+        while (buffer.hasRemaining()) {
             decodePacketFromBytes(buffer);
-        } while (buffer.hasRemaining());
+        }
+        // Обновляем устройства
         processUpdateDevices();
         // Проверяем выключенные устройства
         processDisabledDevices();
@@ -721,8 +718,8 @@ public class SmartHomeHub {
      * @param buffer буфер с данными
      */
     private void decodePacketFromBytes(ByteBuffer buffer) {
-        int length = buffer.get();
         var packet = new Packet();
+        int length = buffer.get();
         packet.length = (byte) length;
         packet.payload = new byte[length];
         buffer.get(packet.payload);
@@ -833,7 +830,7 @@ public class SmartHomeHub {
      * @return байты пакетов
      */
     private byte[] encodePacketsToTransfer(List<Payload> payloads) {
-        var buffer = ByteBuffer.allocate(1024);
+        var buffer = ByteBuffer.allocate(2048);
 
         payloads.forEach((p) -> {
             var packet = new Packet();
@@ -862,7 +859,7 @@ public class SmartHomeHub {
      * @return байты тела пакета
      */
     private byte[] encodePayloadToBytes(Payload payload) {
-        ByteBuffer buffer = ByteBuffer.allocate(2048);
+        ByteBuffer buffer = ByteBuffer.allocate(1024);
 
         writeULEB128(buffer, BigInteger.valueOf(payload.src));
         writeULEB128(buffer, BigInteger.valueOf(payload.dst));
@@ -889,19 +886,12 @@ public class SmartHomeHub {
      */
     private void encodeCmdBody(ByteBuffer buffer, byte cmd, Payload.CmdBody cmdBody) {
         switch (cmd) {
-            case 0x01, 0x02: // WHOISHERE
-                encodeStringToBytes(buffer, "SmartHub");
-                break;
-            case 0x03: // GETSTATUS
-                break;
-            case 0x04: // STATUS
-                break;
-            case 0x05: // SETSTATUS
+            case 0x01, 0x02 -> // WHOISHERE
+                    encodeStringToBytes(buffer, "SmartHub");
+            case 0x05 -> { // SETSTATUS
                 var cmdBodyStatus = (Payload.CmdBodyStatus) cmdBody;
                 buffer.put((byte) (cmdBodyStatus.status ? 1 : 0));
-                break;
-            case 0x06: // TICK
-                break;
+            }
         }
     }
 
